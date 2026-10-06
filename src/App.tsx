@@ -10,10 +10,13 @@ import {
   Volume2,
   RefreshCw,
   Copy,
-  Check
+  Check,
+  Square
 } from 'lucide-react';
-import { generateVerse, VerseConfig, Density, Orbit, Grid } from './services/geminiService';
+import { streamVerse } from './services/verseClient';
 import { parseBars } from './lib/bars';
+import { DENSITIES, GRIDS, LIMITS, ORBITS } from '../shared/verse';
+import type { Density, Grid, Orbit, VerseConfig } from '../shared/verse';
 
 const Tooltip = ({ children, text }: { children: React.ReactNode; text: string; key?: React.Key }) => {
   const [isVisible, setIsVisible] = useState(false);
@@ -64,30 +67,42 @@ export default function App() {
   const [tone, setTone] = useState('');
   const [isSpitting, setIsSpitting] = useState(false);
   const [verse, setVerse] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   
   const outputRef = useRef<HTMLDivElement>(null);
+  // Set while a generation is running; doubles as the guard against starting a second one.
+  const abortRef = useRef<AbortController | null>(null);
 
   const handleSpit = async () => {
-    if (!seed.trim() || isSpitting) return;
+    if (!seed.trim() || abortRef.current) return;
     
+    const controller = new AbortController();
+    abortRef.current = controller;
     setIsSpitting(true);
     setVerse('');
+    setError(null);
     
     try {
       const config: VerseConfig = { seed, density, orbit, grid, tone };
-      const stream = generateVerse(config);
-      
-      for await (const chunk of stream) {
+      for await (const chunk of streamVerse(config, controller.signal)) {
         setVerse(prev => prev + chunk);
       }
-    } catch (error) {
-      console.error('Error generating verse:', error);
-      setVerse('ERROR: ENGINE STALLED. CHECK CONNECTION OR API KEY.');
+    } catch (err) {
+      // Stop is not an error: keep whatever arrived so far.
+      if ((err as { name?: string })?.name !== 'AbortError') {
+        console.error('Error generating verse:', err);
+        setError(err instanceof Error ? err.message : 'Something went wrong.');
+      }
     } finally {
+      abortRef.current = null;
       setIsSpitting(false);
     }
   };
+
+  const handleStop = () => abortRef.current?.abort();
+
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(verse);
@@ -127,6 +142,7 @@ export default function App() {
                 type="text"
                 value={seed}
                 onChange={(e) => setSeed(e.target.value)}
+                maxLength={LIMITS.seed}
                 placeholder="ENTER PHRASE..."
                 className="w-full bg-brutal-black brutal-border p-4 text-lg focus:outline-none focus:ring-2 focus:ring-neon-pink brutal-shadow-pink transition-all"
                 onKeyDown={(e) => e.key === 'Enter' && handleSpit()}
@@ -146,7 +162,7 @@ export default function App() {
                 <Layers size={12} /> Density (Rhyme Complexity)
               </label>
               <div className="grid grid-cols-3 gap-2">
-                {(['LOW', 'MID', 'HIGH'] as Density[]).map((d) => (
+                {DENSITIES.map((d) => (
                   <Tooltip key={d} text={TOOLTIPS.DENSITY[d]}>
                     <button
                       onClick={() => setDensity(d)}
@@ -167,7 +183,7 @@ export default function App() {
                 <Compass size={12} /> Orbit (Conceptual Distance)
               </label>
               <div className="grid grid-cols-3 gap-2">
-                {(['TIGHT', 'MID', 'LOOSE'] as Orbit[]).map((o) => (
+                {ORBITS.map((o) => (
                   <Tooltip key={o} text={TOOLTIPS.ORBIT[o]}>
                     <button
                       onClick={() => setOrbit(o)}
@@ -188,7 +204,7 @@ export default function App() {
                 <Activity size={12} /> Grid (Flow & Cadence)
               </label>
               <div className="grid grid-cols-3 gap-2">
-                {(['POCKET', 'MID', 'CHOPPER'] as Grid[]).map((g) => (
+                {GRIDS.map((g) => (
                   <Tooltip key={g} text={TOOLTIPS.GRID[g]}>
                     <button
                       onClick={() => setGrid(g)}
@@ -212,6 +228,7 @@ export default function App() {
                 type="text"
                 value={tone}
                 onChange={(e) => setTone(e.target.value)}
+                maxLength={LIMITS.tone}
                 placeholder="AGGRESSIVE, MELANCHOLIC..."
                 className="w-full bg-brutal-black border border-white/20 p-2 text-xs focus:outline-none focus:border-neon-green"
               />
@@ -220,10 +237,12 @@ export default function App() {
 
           <div className="mt-auto pt-6">
             <button
-              onClick={handleSpit}
-              disabled={isSpitting || !seed.trim()}
+              onClick={isSpitting ? handleStop : handleSpit}
+              disabled={!isSpitting && !seed.trim()}
               className={`w-full py-4 font-display text-2xl uppercase tracking-widest flex items-center justify-center gap-3 transition-all brutal-shadow-neon ${
-                isSpitting || !seed.trim() 
+                isSpitting
+                  ? 'bg-neon-pink text-brutal-black'
+                  : !seed.trim()
                   ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed opacity-50' 
                   : 'bg-neon-green text-brutal-black hover:translate-x-[-2px] hover:translate-y-[-2px] active:translate-x-0 active:translate-y-0 active:shadow-none'
               }`}
@@ -231,7 +250,8 @@ export default function App() {
               {isSpitting ? (
                 <>
                   <RefreshCw className="animate-spin" size={24} />
-                  Igniting...
+                  Stop
+                  <Square size={18} />
                 </>
               ) : (
                 <>
@@ -248,7 +268,7 @@ export default function App() {
           {/* Status Bar */}
           <div className="h-10 border-b border-white/10 px-6 flex items-center justify-between text-[10px] uppercase tracking-widest text-zinc-500">
             <div className="flex gap-4">
-              <span>Status: {isSpitting ? 'Generating' : 'Idle'}</span>
+              <span>Status: {isSpitting ? 'Generating' : error ? 'Error' : 'Idle'}</span>
               <span>Engine: Gemini 3.1 Pro</span>
               <span>Phrase: {seed || 'None'}</span>
             </div>
@@ -262,6 +282,12 @@ export default function App() {
               </button>
             )}
           </div>
+
+          {error && (
+            <div role="alert" className="mx-6 mt-4 border-2 border-neon-pink px-4 py-3 text-xs uppercase tracking-widest text-neon-pink">
+              {error}
+            </div>
+          )}
 
           {/* Verse Display */}
           <div 
