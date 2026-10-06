@@ -13,6 +13,7 @@ import {
   Check
 } from 'lucide-react';
 import { generateVerse, VerseConfig, Density, Orbit, Grid } from './services/geminiService';
+import { parseBars } from './lib/bars';
 
 const Tooltip = ({ children, text }: { children: React.ReactNode; text: string; key?: React.Key }) => {
   const [isVisible, setIsVisible] = useState(false);
@@ -68,7 +69,7 @@ export default function App() {
   const outputRef = useRef<HTMLDivElement>(null);
 
   const handleSpit = async () => {
-    if (!seed.trim()) return;
+    if (!seed.trim() || isSpitting) return;
     
     setIsSpitting(true);
     setVerse('');
@@ -284,9 +285,7 @@ export default function App() {
               )}
             </AnimatePresence>
 
-            {verse.split('\n').map((line, idx) => {
-              if (!line.trim()) return null;
-              const parts = line.split('//');
+            {parseBars(verse).map((bar, idx) => {
               return (
                 <motion.div 
                   key={idx}
@@ -297,13 +296,12 @@ export default function App() {
                 >
                   <span className="text-zinc-700 mr-4 text-xs w-6">{String(idx + 1).padStart(2, '0')}</span>
                   <div className="flex flex-wrap items-center">
-                    <span className="group-hover:text-neon-green transition-colors">{parts[0]}</span>
-                    {parts.length > 1 && (
-                      <>
-                        <span className="caesura">//</span>
-                        <span className="group-hover:text-neon-green transition-colors">{parts[1]}</span>
-                      </>
-                    )}
+                    {bar.map((segment, i) => (
+                      <React.Fragment key={i}>
+                        {i > 0 && <span className="caesura">//</span>}
+                        <span className="group-hover:text-neon-green transition-colors">{segment}</span>
+                      </React.Fragment>
+                    ))}
                   </div>
                 </motion.div>
               );
