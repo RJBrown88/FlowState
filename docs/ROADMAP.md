@@ -6,7 +6,7 @@ Last updated 2026-10-06. Based on the code review of the original AI Studio expo
 
 **Where it ends:** a self-hosted FlowState with the key safely on the server, a clean project identity, and a model that can be changed (or replaced in an emergency) without touching code.
 
-The *what* and *why* live here. The *how* lives in each phase's blueprint.
+The *what* and *why* live here. The *how* lives in each phase's blueprint. *Who does what, in order* lives in the [action plan](ACTION_PLAN.md).
 
 ---
 
