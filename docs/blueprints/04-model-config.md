@@ -2,13 +2,16 @@
 
 **Goal:** the model is set in exactly one place, can be changed without a code change, and the app survives Google retiring it. The new model choice is backed by a small evaluation instead of a guess.
 
-**Files:** new `server/config.ts`, new `scripts/eval.ts`; changed `server/verse.ts`, `src/App.tsx`, `package.json`, `.env.example`
-**Size:** ~40 lines of app changes + ~100-line eval script
-**Depends on:** Phase 3 (soft). Without Phase 3, apply the same ideas to `src/services/geminiService.ts` and use a Vite `import.meta.env.VITE_GEMINI_MODEL` instead of a server env var.
+- **Roadmap:** Phase 4 · size M · exit criteria in [ROADMAP § Done when](../ROADMAP.md#done-when)
+- **Files:** changed `server/config.ts`, `server/verse.ts`, `server/index.ts`, `src/App.tsx`, `package.json`, `.env.example`, `.gitignore`; new `scripts/eval.ts`, `docs/eval-results.md`
+- **Depends on:** Phase 3 (extends its `server/config.ts` and `/api`), Phase 1 (the eval reuses `parseBars`). Without Phase 3, apply the same ideas to `src/services/geminiService.ts` with a Vite `import.meta.env.VITE_GEMINI_MODEL` variable. That variable is public in the bundle, which is fine for a model name.
+- **Emergency path:** 4a ships on its own. If the preview model is retired before this phase is scheduled (roadmap risk #1), do 4a alone, set `GEMINI_MODEL` to any working ID, and run the rest later.
 
 ---
 
 ## Current state
+
+Today (before Phase 3):
 
 | Where | What |
 |---|---|
@@ -16,6 +19,8 @@
 | `src/services/geminiService.ts:77` | `temperature: 0.9` |
 | `src/App.tsx:110` | Marquee text `… // Gemini 3.1 Pro // …` |
 | `src/App.tsx:251` | Status bar `Engine: Gemini 3.1 Pro` |
+
+After Phase 3 the ID lives in `server/config.ts` and the temperature in `server/verse.ts`. The two UI labels are untouched.
 
 Two problems:
 1. **It's a preview model.** Google retires preview models on a few weeks' notice: `gemini-3-pro-preview` was shut down on 2026-03-09 and replaced by the 3.1 preview this app uses. When this one is retired, every request fails, and the app currently shows only "ENGINE STALLED".
@@ -25,16 +30,19 @@ Two problems:
 
 ## 4a. One source of truth
 
-### `server/config.ts`
+### `server/config.ts` (extends Phase 3's)
+Two new entries in the existing `config` object, read and checked at startup like the rest:
 ```ts
-export const MODEL_ID = process.env.GEMINI_MODEL ?? '<chosen default — see 4c>';
-export const THINKING_LEVEL = process.env.GEMINI_THINKING_LEVEL; // undefined = model default
+modelId: process.env.GEMINI_MODEL || '<chosen default — see 4c>',
+thinkingLevel: optionalEnum('GEMINI_THINKING_LEVEL', ['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']), // undefined = model default
 ```
-`server/verse.ts` imports `MODEL_ID` in place of its Phase 3 constant.
+`optionalEnum` exits at boot with a clear message on a typo (`GEMINI_THINKING_LEVEL=hgih`), instead of every request failing with a 400. Whether a *valid* level is supported by the chosen model is still only known at request time (see 4b).
+
+`server/verse.ts` already reads `config.modelId`, so it needs no change for the ID. It passes `thinkingConfig: { thinkingLevel }` only when `config.thinkingLevel` is set.
 
 ### Getting the name to the UI: options
 
-**[A] `GET /api/meta` (recommended):** the server returns `{ "model": MODEL_ID }`. `App.tsx` fetches it once on mount and shows it in both places. If the env var changes, the UI follows automatically. Costs one tiny request and a placeholder (`Engine: …`) for a few milliseconds.
+**[A] `GET /api/meta` (recommended):** the server returns `{ "model": config.modelId }`. `App.tsx` fetches it once on mount and shows it in both places. If the env var changes, the UI follows automatically. Costs one tiny request and a placeholder (`Engine: …`) for a few milliseconds.
 
 **[B] Shared constant in `shared/model.ts`:** the client and server both import it. There's no extra request, but there's also no env override: changing the model means a code change and a rebuild, which is what this phase is trying to remove.
 
@@ -77,7 +85,10 @@ A model swap changes the product's output, not just its plumbing, so it should b
 
 ### What it does
 1. Calls the running server's `/api/verse`, so it tests the real prompt and config path.
-2. Runs a fixed grid: **6 seeds × 3 setting combos × each candidate model**. The model is switched by restarting the server with a different `GEMINI_MODEL`, or by adding an optional `model` override to the request, accepted only when `NODE_ENV !== 'production'`.
+2. Runs a fixed grid: **6 seeds × 3 setting combos** against whatever model the server is running. To compare models, restart the server with a different `GEMINI_MODEL` and run again. The script reads `/api/meta` to label its output.
+   There's deliberately no per-request model override. It would be one more input to validate, and an exposed server would let anyone choose the most expensive model.
+   - Run the server with `RATE_LIMIT_PER_MINUTE=100` during evals. The default limit of 10 would answer most of the 18 requests with 429s.
+   - The script sends requests one at a time, so time-to-first-token figures aren't skewed by parallel load.
    - Seeds: `rent is due`, `midnight oil`, `glass ceiling`, `static on the line`, `borrowed time`, `paper planes`
    - Combos: `LOW/TIGHT/POCKET`, `MID/MID/MID`, `HIGH/LOOSE/CHOPPER`
 3. Saves every verse to `eval-out/<model>/<seed>-<combo>.txt` (gitignored) for reading.
@@ -96,10 +107,11 @@ A model swap changes the product's output, not just its plumbing, so it should b
 5. **Manual scoring** for what code can't judge: read the HIGH/LOOSE/CHOPPER verses side by side and rate rhyme density and seed callbacks every 4th bar (rule 3) on a 1–3 scale. This is a ~10-minute read.
 
 ### Cost
-6 × 3 × 2 models = 36 requests per run, ~1 minute and a few cents. Running it with the default thinking level and with `LOW` doubles that and answers 4b at the same time.
+18 requests per model per thinking level, run one after another: a few minutes each. Comparing two models at two thinking levels is 72 requests, a small amount of quota, but Pro models with HIGH thinking bill thinking tokens too. Check current pricing once before the first run.
 
-### Script entry
-`"eval": "node scripts/eval.ts"` in `package.json`. Add `eval-out/` to `.gitignore`.
+### Script entry and results
+- `"eval": "node scripts/eval.ts"` in `package.json`. Add `eval-out/` to `.gitignore`.
+- Each run appends its table (date, model, thinking level, SDK version, checks) to **`docs/eval-results.md`**, which is committed. That file is the "recorded eval results" the roadmap's exit criterion refers to, and the baseline for the next model change.
 
 ---
 
@@ -113,13 +125,15 @@ Run the eval once **before** and once **after** the bump with the same model. Ma
 
 ---
 
-## Order of operations within this phase
+## Measurement sequence
 
-1. Add `server/config.ts` and `/api/meta`, and wire the UI labels. **No behavior change yet** (default = current preview ID).
+The eval only means something if one variable changes at a time:
+
+1. Extend `server/config.ts`, add `/api/meta`, and wire the UI labels. **No behavior change yet** (default = current preview ID). This is the emergency-path slice.
 2. Write `scripts/eval.ts` and get a baseline on the current model.
 3. Bump the SDK and re-run the eval. It should match the baseline.
 4. Remove `temperature`. Run the eval with the default thinking level and with `LOW`.
-5. Run the eval on the candidate stable model(s). Pick the default and the thinking level, and record the results table in the commit message or in `docs/`.
+5. Run the eval on the candidate stable model(s). Pick the default and the thinking level, and record the decision at the top of `docs/eval-results.md`.
 
 Each step is its own commit, so any regression can be traced to one change.
 
@@ -127,11 +141,18 @@ Each step is its own commit, so any regression can be traced to one change.
 
 ## Verification
 
+Covers the roadmap exit criteria for Phase 4 plus the shared gate.
+
 1. `grep -rn "gemini-3\|Gemini 3" src/ server/ shared/` → only `server/config.ts` matches.
 2. `GEMINI_MODEL=<other-id> npm run dev` → the marquee and status bar show `<other-id>`, and verses come from it (check the server log).
 3. `GEMINI_MODEL=gemini-does-not-exist npm run dev` → generating shows "Model `gemini-does-not-exist` is unavailable." (Phase 3's 404 mapping). This is the dress rehearsal for the preview's retirement.
-4. Eval: the chosen default passes ≥ 90 % of bars on caesura and bar-count checks across the grid, and its time to first token is recorded.
-5. `npm run lint`, `npm run build` pass.
+4. `GEMINI_THINKING_LEVEL=hgih npm run dev` → the server refuses to start and names the variable.
+5. Eval: the chosen default passes ≥ 90 % of bars on caesura and bar-count checks across the grid. `docs/eval-results.md` records that run, the baseline and the decision.
+6. `npm run lint`, `npm run build` pass.
+
+## Rollback
+- **Model choice:** set `GEMINI_MODEL` back to the previous ID and restart. No code change or redeploy needed. `docs/eval-results.md` lists previous models.
+- **Code:** each measurement step is its own commit and reverts on its own. Reverting the SDK bump also needs `npm ci`.
 
 ## Sources
 - Gemini 3 developer guide (temperature 1.0, thinking level): <https://ai.google.dev/gemini-api/docs/gemini-3>

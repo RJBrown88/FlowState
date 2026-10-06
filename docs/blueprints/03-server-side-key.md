@@ -2,14 +2,14 @@
 
 **Goal:** the Gemini API key never reaches the browser. The browser talks to a small Node server, and the server talks to Gemini. Along the way the app gains a Stop button, real error messages and a much smaller bundle.
 
-**Files:**
-- New: `server/index.ts`, `server/verse.ts`, `server/prompt.ts`, `shared/verse.ts`, `src/services/verseClient.ts`
-- Changed: `src/App.tsx`, `vite.config.ts`, `package.json`, `tsconfig.json`, `.env.example`, `README.md`
-- Deleted: `src/services/geminiService.ts` (its contents move to `server/` and `shared/`)
-
-**Size:** ~150 new lines, ~40 changed in `App.tsx`
-**Depends on:** Phase 2 (clean `package.json`)
-**Priority:** required before the first self-hosted deploy. Even on a LAN-only box, anyone on the network (guest Wi-Fi included) could read the key out of the bundle.
+- **Roadmap:** Phase 3 · size L · exit criteria in [ROADMAP § Done when](../ROADMAP.md#done-when). The **Self-hosting** section at the end also covers the *First deploy* milestone.
+- **Files:**
+  - New: `server/config.ts`, `server/index.ts`, `server/verse.ts`, `server/prompt.ts`, `shared/verse.ts`, `src/services/verseClient.ts`
+  - Changed: `src/App.tsx`, `vite.config.ts`, `package.json`, `tsconfig.json`, `.env.example`, `README.md`
+  - Deleted: `src/services/geminiService.ts` (its contents move to `server/` and `shared/`)
+- **Depends on:** Phase 2 (settled `package.json`). Phase 1 should land first so the guard and bar fixes carry over.
+- **Used later by:** Phase 4 extends `server/config.ts` and the `/api` surface.
+- **Priority:** required before the first self-hosted deploy. Even on a LAN-only box, anyone on the network (guest Wi-Fi included) could read the key out of the bundle.
 
 ---
 
@@ -41,7 +41,7 @@ App.tsx
 
 ### Server shape: options
 
-**[A] One process, Vite inside Express (recommended).** In dev, Express mounts Vite as middleware (hot reload still works). In production, Express serves the built `dist/`. One port and one command, and dev behaves like prod. This is also the layout AI Studio's own full-stack template uses.
+**[A] One process, Vite inside Express (recommended).** In dev, Express mounts Vite as middleware (hot reload still works). In production, Express serves the built `dist/`. One port and one command, and dev behaves like prod.
 
 **[B] Two processes: Vite dev server + separate API server.** Vite proxies `/api` to the API server. The server code is slightly simpler, but you run two terminals (or add `concurrently`), and production still needs something to serve `dist/`, which ends up looking like [A] anyway.
 
@@ -76,6 +76,35 @@ No compile step, and nothing extra to install. `tsx` and `dotenv` stay in `packa
 
 ## File by file
 
+### `server/config.ts` — the only file that reads `process.env`
+Every setting is read and checked in one place, at startup. A typo in `.env.local` then fails loudly at boot instead of misbehaving later, and Phase 4 has one obvious file to extend.
+```ts
+function int(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`${name} must be a non-negative integer, got "${raw}"`);
+  return n;
+}
+
+const apiKey = process.env.GEMINI_API_KEY;
+if (!apiKey) {
+  console.error('GEMINI_API_KEY is not set (put it in .env.local)');
+  process.exit(1);
+}
+
+export const config = {
+  apiKey,
+  isProd: process.env.NODE_ENV === 'production',
+  port: int('PORT', 3000),
+  host: process.env.HOST || '0.0.0.0',
+  trustProxy: int('TRUST_PROXY', 0),           // number of reverse proxies in front (0 = none)
+  rateLimitPerMinute: int('RATE_LIMIT_PER_MINUTE', 10),
+  modelId: 'gemini-3.1-pro-preview',           // unchanged from today; Phase 4 makes it configurable
+} as const;
+```
+Why the key check lives here and not in `index.ts`: ES module imports run before the importing file's own code. A check in `index.ts` would run *after* `verse.ts` had already been loaded with a missing key.
+
 ### `shared/verse.ts` — used by both client and server
 ```ts
 export const DENSITIES = ['LOW', 'MID', 'HIGH'] as const;
@@ -108,16 +137,17 @@ The value arrays let the server validate against the same lists the UI renders. 
    - `density`, `orbit`, `grid`: must be in the shared arrays;
    - `tone`: optional string, at most `LIMITS.tone` characters.
 2. **Rate limit**: options:
-   - **[A] `express-rate-limit` (recommended):** `rateLimit({ windowMs: 60_000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false })`. Maintained, handles response headers, one dependency.
+   - **[A] `express-rate-limit` (recommended):** `rateLimit({ windowMs: 60_000, limit: config.rateLimitPerMinute, standardHeaders: 'draft-8', legacyHeaders: false })`. Maintained, handles response headers, one dependency.
    - **[B] Hand-rolled:** a `Map<ip, timestamps[]>`, ~15 lines, no dependency, but you own the edge cases.
 
-   Behind a reverse proxy (Caddy, nginx, Cloudflare Tunnel), set `TRUST_PROXY=1` (read in `server/index.ts`), or every visitor shares the proxy's IP and one limit.
+   Behind a reverse proxy (Caddy, nginx, Cloudflare Tunnel), set `TRUST_PROXY=1`, or every visitor shares the proxy's IP and one limit. The limit itself is configurable (`RATE_LIMIT_PER_MINUTE`). Phase 4's eval raises it temporarily, because it sends dozens of requests in a minute.
 3. **Cancel on disconnect:**
    ```ts
    const controller = new AbortController();
    res.on('close', () => { if (!res.writableEnded) controller.abort(); });
    ```
    Listen on `res`, not `req`. On current Node, `req` emits `close` as soon as the request body has been read, which would cancel every request immediately.
+   Log one line on abort (`client disconnected, generation cancelled`). That's how the verification step can see cancellation actually happened.
 4. **Stream:**
    ```ts
    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
@@ -125,7 +155,7 @@ The value arrays let the server validate against the same lists the UI renders. 
    res.setHeader('X-Accel-Buffering', 'no'); // stop nginx-style proxies from buffering
 
    const stream = await ai.models.generateContentStream({
-     model: MODEL_ID,
+     model: config.modelId,
      contents: [{ role: 'user', parts: [{ text: buildPrompt(config) }] }],
      config: { systemInstruction: SYSTEM_INSTRUCTION, temperature: 0.9, abortSignal: controller.signal },
    });
@@ -134,6 +164,7 @@ The value arrays let the server validate against the same lists the UI renders. 
    }
    res.end(JSON.stringify({ done: true }) + '\n');
    ```
+   `ai` is one `new GoogleGenAI({ apiKey: config.apiKey })` created when the module loads, not one per request. `temperature: 0.9` is carried over unchanged so this phase doesn't alter output. Phase 4 revisits it.
    Headers are set but not flushed before the `await`. If Gemini rejects the request before the first chunk (bad key, unknown model), the route can still answer with a proper status code.
 5. **Errors:** if `controller.signal.aborted`, return silently (the user pressed Stop). Otherwise, map `ApiError.status` (exported by `@google/genai`) to a short message and log the full error on the server:
 
@@ -147,49 +178,52 @@ The value arrays let the server validate against the same lists the UI renders. 
 
    If no chunk has been sent yet (`!res.headersSent`), respond with `res.status(502).json({ error })`. Otherwise `res.end(JSON.stringify({ error }) + '\n')`.
 
-`MODEL_ID` is a constant here for now. Phase 4 moves it to config.
+`config.modelId` is a fixed value for now. Phase 4 makes it an env setting.
 
 ### `server/index.ts`
 ```ts
 import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import path from 'node:path';
+import { config } from './config.ts';
 import { verseRouter } from './verse.ts';
 
-if (!process.env.GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY is not set (put it in .env.local)');
-  process.exit(1);
-}
-
-const isProd = process.env.NODE_ENV === 'production';
-const port = Number(process.env.PORT ?? 3000);
-const host = process.env.HOST ?? '0.0.0.0';
 const app = express();
+if (config.trustProxy > 0) app.set('trust proxy', config.trustProxy);
 
-// Number of reverse proxies in front of the app (0 = none). Needed for correct client IPs in rate limiting.
-const trustProxy = Number(process.env.TRUST_PROXY ?? 0);
-if (trustProxy > 0) app.set('trust proxy', trustProxy);
-
+app.get('/api/health', (_req, res) => { res.json({ ok: true }); });
 app.use('/api', express.json({ limit: '4kb' }), verseRouter);
-app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
+app.use('/api', (_req, res) => { res.status(404).json({ error: 'Not found' }); });
 
-if (isProd) {
+if (config.isProd) {
   const dist = path.join(import.meta.dirname, '..', 'dist');
   app.use(express.static(dist));
-  app.get('/{*splat}', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
+  app.get('/{*splat}', (_req, res) => { res.sendFile(path.join(dist, 'index.html')); });
 } else {
   const { createServer } = await import('vite'); // dynamic: vite is a devDependency
   const vite = await createServer({ server: { middlewareMode: true }, appType: 'spa' });
   app.use(vite.middlewares);
 }
 
-app.listen(port, host, () => console.log(`FlowState on http://${host}:${port}`));
+// Last: any unhandled error, including malformed or oversized JSON bodies, becomes a JSON reply
+app.use((err: { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
+  const status = err.status ?? 500;
+  if (status >= 500) console.error(err);
+  if (res.headersSent) { res.end(); return; }
+  res.status(status).json({ error: status < 500 ? 'Bad request.' : 'Internal server error.' });
+});
+
+app.listen(config.port, config.host, () => console.log(`FlowState on http://${config.host}:${config.port}`));
 ```
 Notes:
 - Vite is imported dynamically so a production install (`npm ci --omit=dev`) doesn't need it.
 - `/{*splat}` is Express 5's catch-all syntax. Express 4's `*` throws on startup in v5.
 - The `/api` 404 handler stops unknown API paths from falling through to `index.html` in production.
 - The 4 KB body limit is generous: the largest valid request is ~300 bytes.
+- The error handler matters because Express's default error page is HTML (with a stack trace outside production). The client expects `{"error": …}`, so a malformed request would otherwise surface as a vague "Server error (400)".
+- `/api/health` gives uptime monitors and the deploy smoke test something cheap to hit that doesn't spend Gemini quota.
 - `HOST` defaults to all interfaces (LAN access). Set it to `127.0.0.1` when a reverse proxy on the same box is the only way in.
+- In dev, Vite's hot-reload connection uses its own port (24678) unless it's handed the HTTP server. That's fine for local development. Only revisit it if you develop against the server from another machine.
 
 ### `src/services/verseClient.ts` — replaces `geminiService.ts`
 Same async-generator shape as the old `generateVerse`, so `App.tsx`'s `for await` loop keeps working:
@@ -230,6 +264,7 @@ export async function* streamVerse(config: VerseConfig, signal?: AbortSignal) {
 }
 ```
 Lines are buffered until the newline because network chunks don't line up with JSON lines. One `read()` can hold half a line or three lines.
+Wrap the read loop in `try { … } finally { reader.cancel().catch(() => {}) }`. When the generator throws (an `{"error"}` line) or the caller stops iterating, the response body is then closed instead of left dangling.
 
 ### `src/App.tsx`
 - **Import** `streamVerse` and the shared types (`import type`).
@@ -278,13 +313,16 @@ GEMINI_API_KEY="your-key-here"
 
 # Optional
 PORT=3000
-HOST=0.0.0.0        # 127.0.0.1 when only a local reverse proxy should reach it
-TRUST_PROXY=0       # 1 when behind one reverse proxy (Caddy, nginx, Cloudflare Tunnel)
+HOST=0.0.0.0              # 127.0.0.1 when only a local reverse proxy should reach it
+TRUST_PROXY=0             # 1 when behind one reverse proxy (Caddy, nginx, Cloudflare Tunnel)
+RATE_LIMIT_PER_MINUTE=10  # per client IP, on /api/verse only
 ```
 
 ---
 
 ## Verification
+
+Covers the roadmap exit criteria for Phase 3 plus the shared gate. The deploy milestone has its own smoke test under **Self-hosting**.
 
 1. `npm run lint`, `npm run build` pass.
 2. **Key absent from the bundle:**
@@ -304,14 +342,17 @@ TRUST_PROXY=0       # 1 when behind one reverse proxy (Caddy, nginx, Cloudflare 
    # 400: seed too long
    # 429: 11 requests inside a minute
    # 404 JSON: curl -s localhost:3000/api/nope
+   # 400 JSON (not an HTML page): malformed body
+   curl -s -X POST localhost:3000/api/verse -H 'Content-Type: application/json' -d '{oops'
+   # 200: curl -s localhost:3000/api/health
    ```
-   Ctrl-C a `curl -N` mid-stream → the server logs nothing alarming, and the Gemini request is cancelled (no further chunks are processed).
+   Ctrl-C a `curl -N` mid-stream → the server logs `client disconnected, generation cancelled` once, and no error.
+   Start with `GEMINI_API_KEY` unset → the server exits immediately with the "not set" message. Start with `PORT=abc` → it exits naming `PORT`.
 5. **Bad key:** set `GEMINI_API_KEY=nope` → the UI shows "Server API key is invalid…", not "ENGINE STALLED".
 6. **UI:** Stop mid-verse keeps the partial text. Enter during a generation does nothing. A new generation clears an old error.
 7. **Production mode:** `npm run build && npm start` → `localhost:3000` serves the app, and refreshing works.
 
 ---
-
 
 ## Self-hosting
 
@@ -321,6 +362,7 @@ Decision (2026-10-06): **self-hosted**. Any Linux box works: a VM, an LXC contai
 - **Node 22.18 or newer.** Distro packages are often older. Use NodeSource's apt repo or the official binaries, and check with `node -v`.
 - **Build tools, possibly:** `better-sqlite3` (kept from the template) downloads a prebuilt binary when one matches the CPU and Node version, and otherwise compiles. Install `build-essential python3` so a fallback compile doesn't fail the deploy.
 - **A dedicated user:** `useradd --system --home /opt/flowstate --shell /usr/sbin/nologin flowstate`.
+- **Where `node` lives:** the unit file below assumes `/usr/bin/node` (true for NodeSource and distro packages). With nvm or a manual install, use the path from `command -v node`, and make sure it isn't inside a home directory: `ProtectHome=true` hides those.
 
 ### Layout
 ```
@@ -336,7 +378,11 @@ npm ci                 # full install: the build needs Vite and Tailwind
 npm run build          # writes dist/
 npm prune --omit=dev   # drop build tools from the running install
 sudo systemctl restart flowstate
+git tag "deploy-$(date +%Y%m%d-%H%M)"   # records which commit went live, and when
 ```
+**Known limitation:** `npm ci` replaces `node_modules` while the old process is still running. An in-flight verse can fail during that minute. That's acceptable for a personal app. If it ever matters, build in a second checkout and swap directories before restarting.
+
+**Rolling back a deploy:** `git checkout <previous deploy-… tag>`, then rerun the steps from `npm ci` on. That leaves the checkout on a detached commit, so run `git checkout main` before the next normal `git pull`.
 
 ### systemd unit: `/etc/systemd/system/flowstate.service`
 ```ini
@@ -387,6 +433,13 @@ Every verse costs Gemini quota on your key, and the rate limit only slows abuse 
 
 ### Smoke test after deploy
 1. `systemctl status flowstate` → active.
-2. `curl -s localhost:3000/api/nope` → `{"error":"Not found"}`.
-3. Open the app from another device, generate a verse, and watch it stream line by line (not all at once).
-4. `grep -c AIza /opt/flowstate/dist/assets/*.js` → `0` (no key in the shipped bundle).
+2. `curl -s localhost:3000/api/health` → `{"ok":true}`, and `curl -s localhost:3000/api/nope` → `{"error":"Not found"}`.
+3. `sudo reboot`, then repeat step 1 → the service came back on its own (roadmap exit criterion).
+4. Open the app from another device, generate a verse, and watch it stream line by line (not all at once).
+5. `grep -c AIza /opt/flowstate/dist/assets/*.js` → `0` (no key in the shipped bundle).
+
+---
+
+## Rollback
+- **Code:** revert the phase. That restores the in-browser Gemini call, and with it the key-in-bundle problem, so a reverted build must not be deployed (roadmap hard rule).
+- **Deploy:** check out the previous `deploy-…` tag and redeploy (see *Deploy / update*).

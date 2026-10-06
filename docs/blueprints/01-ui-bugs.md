@@ -2,9 +2,10 @@
 
 **Goal:** a verse can only be generated once at a time, bars are numbered 01, 02, 03… with no gaps, and no text from the model is dropped.
 
-**Files:** `src/App.tsx`, new `src/lib/bars.ts`
-**Size:** ~15 changed lines in `App.tsx`, ~20-line new helper
-**Dependencies:** none (no `package.json` changes)
+- **Roadmap:** Phase 1 · size S · exit criteria in [ROADMAP § Done when](../ROADMAP.md#done-when)
+- **Files:** `src/App.tsx`; new `src/lib/bars.ts`
+- **Depends on:** nothing. No package changes.
+- **Used later by:** Phase 3 replaces the 1a guard with its abort-controller guard. Phase 4's eval script imports `parseBars`.
 
 ---
 
@@ -76,7 +77,8 @@ export function parseBars(verse: string): Bar[] {
 ### Streaming check
 While a verse streams in, the last line is incomplete and changes with every chunk. That's still fine:
 - bars are only ever appended, so index keys (`key={idx}`) stay stable and existing bars don't re-mount or re-animate;
-- a blank line that arrives as two separate chunks (`"\n"` then `"\n"`) is still filtered out, because the filter runs on the whole accumulated text on every render.
+- a blank line that arrives as two separate chunks (`"\n"` then `"\n"`) is still filtered out, because the filter runs on the whole accumulated text on every render;
+- a caesura split across chunks (`"… /"` then `"/ …"`) briefly shows a single `/` until the next chunk lands. That's cosmetic and corrects itself on the next render.
 
 ---
 
@@ -112,6 +114,8 @@ With the numbering fix, bar 16 waits `15 × 0.05 = 0.75 s` after mounting before
 
 ## Verification
 
+Covers the roadmap exit criteria for Phase 1 plus the shared gate.
+
 1. `npm run lint` and `npm run build` pass.
 2. Helper check, no test framework needed (Node 22 runs TypeScript directly):
    ```bash
@@ -125,6 +129,9 @@ With the numbering fix, bar 16 waits `15 × 0.05 = 0.75 s` after mounting before
    - Generate a verse and press Enter repeatedly while it streams → one coherent verse, button stays disabled until it ends.
    - Numbers run 01…N with no gaps.
    - Set GRID = CHOPPER a few times and look for bars with two `//` marks: all segments render.
+
+## Rollback
+A single revert of the phase. Nothing else depends on it until Phase 3, and `parseBars` has no side effects.
 
 ## Out of scope
 - Error text is currently written into the verse and parsed as a bar. Phase 3 replaces this with a separate error state.
