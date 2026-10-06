@@ -9,6 +9,7 @@
 
 **Size:** ~150 new lines, ~40 changed in `App.tsx`
 **Depends on:** Phase 2 (clean `package.json`)
+**Priority:** required before the first self-hosted deploy. Even on a LAN-only box, anyone on the network (guest Wi-Fi included) could read the key out of the bundle.
 
 ---
 
@@ -64,12 +65,12 @@ Node 22.18+ strips TypeScript types natively (this repo's container has 22.22). 
 - dev: `node --watch --env-file-if-exists=.env.local server/index.ts`
 - prod: `node --env-file-if-exists=.env.local server/index.ts`
 
-No `tsx`, no `ts-node`, no compile step. Rules this imposes, enforced by two `tsconfig.json` flags (below):
+No compile step, and nothing extra to install. `tsx` and `dotenv` stay in `package.json` (kept from the template per the Phase 2 decision) but aren't needed here. Rules this imposes, enforced by two `tsconfig.json` flags (below):
 - relative imports need the `.ts` extension (`./verse.ts`). This is already allowed by `allowImportingTsExtensions`;
 - type-only imports must be written `import type { … }`;
 - no `enum`, `namespace` or constructor parameter properties (syntax that can't simply be deleted).
 
-`--env-file-if-exists` (Node 22.9+) replaces `dotenv`.
+`--env-file-if-exists` (Node 22.9+) does what `dotenv` would. On the production box systemd's `EnvironmentFile=` sets the variables instead (see **Self-hosting**), and the flag is then a harmless no-op.
 
 ---
 
@@ -110,7 +111,7 @@ The value arrays let the server validate against the same lists the UI renders. 
    - **[A] `express-rate-limit` (recommended):** `rateLimit({ windowMs: 60_000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false })`. Maintained, handles response headers, one dependency.
    - **[B] Hand-rolled:** a `Map<ip, timestamps[]>`, ~15 lines, no dependency, but you own the edge cases.
 
-   Behind a reverse proxy (Cloud Run, nginx, Cloudflare), set `app.set('trust proxy', 1)`, or every visitor shares the proxy's IP and one limit.
+   Behind a reverse proxy (Caddy, nginx, Cloudflare Tunnel), set `TRUST_PROXY=1` (read in `server/index.ts`), or every visitor shares the proxy's IP and one limit.
 3. **Cancel on disconnect:**
    ```ts
    const controller = new AbortController();
@@ -161,7 +162,12 @@ if (!process.env.GEMINI_API_KEY) {
 
 const isProd = process.env.NODE_ENV === 'production';
 const port = Number(process.env.PORT ?? 3000);
+const host = process.env.HOST ?? '0.0.0.0';
 const app = express();
+
+// Number of reverse proxies in front of the app (0 = none). Needed for correct client IPs in rate limiting.
+const trustProxy = Number(process.env.TRUST_PROXY ?? 0);
+if (trustProxy > 0) app.set('trust proxy', trustProxy);
 
 app.use('/api', express.json({ limit: '4kb' }), verseRouter);
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
@@ -176,13 +182,14 @@ if (isProd) {
   app.use(vite.middlewares);
 }
 
-app.listen(port, '0.0.0.0', () => console.log(`FlowState on http://localhost:${port}`));
+app.listen(port, host, () => console.log(`FlowState on http://${host}:${port}`));
 ```
 Notes:
 - Vite is imported dynamically so a production install (`npm ci --omit=dev`) doesn't need it.
 - `/{*splat}` is Express 5's catch-all syntax. Express 4's `*` throws on startup in v5.
 - The `/api` 404 handler stops unknown API paths from falling through to `index.html` in production.
 - The 4 KB body limit is generous: the largest valid request is ~300 bytes.
+- `HOST` defaults to all interfaces (LAN access). Set it to `127.0.0.1` when a reverse proxy on the same box is the only way in.
 
 ### `src/services/verseClient.ts` — replaces `geminiService.ts`
 Same async-generator shape as the old `generateVerse`, so `App.tsx`'s `for await` loop keeps working:
@@ -236,7 +243,7 @@ Lines are buffered until the newline because network chunks don't line up with J
   - clear `error` at the start of each generation.
 
 ### `vite.config.ts`
-Delete the `define` block and the `loadEnv` call. The client no longer needs any environment value. Keep the `hmr` / `DISABLE_HMR` block.
+Delete the `define` block and the `loadEnv` call. The client no longer needs any environment value. (The AI Studio `hmr` block was already removed in Phase 2.)
 
 ### `package.json`
 ```jsonc
@@ -248,7 +255,12 @@ Delete the `define` block and the `loadEnv` call. The client no longer needs any
   "lint": "tsc --noEmit"
 }
 ```
-Add: `express@^5`, `express-rate-limit@^8` (dependencies); `@types/express@^5` (devDependencies). `@google/genai` stays in dependencies, but it's now only used by the server.
+Packages:
+```bash
+npm install express@^5 express-rate-limit@^8     # upgrades the kept template Express 4 → 5, adds the limiter
+npm install -D @types/express@^5
+```
+Express 5 instead of the template's 4: v5 is the current release line, and it forwards errors from async route handlers to the error middleware, which the streaming route relies on. The original 4.x version stays recoverable from the `ai-studio-original` tag. `@google/genai` stays in dependencies, but it's now only used by the server.
 
 `node --watch` restarts the server when server files change. Client changes are still hot-reloaded by Vite without a restart.
 
@@ -263,10 +275,12 @@ No `include` change: with no `include` set, tsc already checks `server/` and `sh
 ```bash
 # Server-side only. Never exposed to the browser.
 GEMINI_API_KEY="your-key-here"
+
 # Optional
 PORT=3000
+HOST=0.0.0.0        # 127.0.0.1 when only a local reverse proxy should reach it
+TRUST_PROXY=0       # 1 when behind one reverse proxy (Caddy, nginx, Cloudflare Tunnel)
 ```
-Drop `APP_URL` unless you're still deploying through AI Studio.
 
 ---
 
@@ -298,10 +312,81 @@ Drop `APP_URL` unless you're still deploying through AI Studio.
 
 ---
 
-## Decision needed before starting: where will it be hosted?
 
-The code above runs on any Node 22.18+ host. What changes per host is `trust proxy`, how the env var is set, and the port:
-- **AI Studio / Cloud Run:** env var set in the console, `PORT` provided by the platform, `trust proxy` on.
-- **A home server / Proxmox LXC:** `npm ci --omit=dev && npm run build && npm start` under systemd. Behind nginx or Caddy → `trust proxy` on. Exposed directly → off.
-- **Render / Fly / Railway:** same as Cloud Run.
-- **Not hosted (local only):** this phase is still worth doing for the Stop button and error handling, but it stops being urgent.
+## Self-hosting
+
+Decision (2026-10-06): **self-hosted**. Any Linux box works: a VM, an LXC container, a Pi or bare metal. The steps assume Debian/Ubuntu and systemd.
+
+### Prerequisites on the box
+- **Node 22.18 or newer.** Distro packages are often older. Use NodeSource's apt repo or the official binaries, and check with `node -v`.
+- **Build tools, possibly:** `better-sqlite3` (kept from the template) downloads a prebuilt binary when one matches the CPU and Node version, and otherwise compiles. Install `build-essential python3` so a fallback compile doesn't fail the deploy.
+- **A dedicated user:** `useradd --system --home /opt/flowstate --shell /usr/sbin/nologin flowstate`.
+
+### Layout
+```
+/opt/flowstate/           git checkout, owned by flowstate
+/opt/flowstate/.env.local GEMINI_API_KEY etc. — chmod 600, owned by flowstate
+```
+
+### Deploy / update
+```bash
+cd /opt/flowstate
+git pull
+npm ci                 # full install: the build needs Vite and Tailwind
+npm run build          # writes dist/
+npm prune --omit=dev   # drop build tools from the running install
+sudo systemctl restart flowstate
+```
+
+### systemd unit: `/etc/systemd/system/flowstate.service`
+```ini
+[Unit]
+Description=FlowState
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=flowstate
+WorkingDirectory=/opt/flowstate
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/flowstate/.env.local
+ExecStart=/usr/bin/node server/index.ts
+Restart=on-failure
+
+# Hardening: the app writes nothing to disk
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+```
+- `ExecStart` calls `node` directly, not `npm start`. npm in between can get in the way of systemd's stop signals, and the env vars already come from `EnvironmentFile`.
+- If a database is added later with `better-sqlite3`, add `ReadWritePaths=/opt/flowstate/data`, because `ProtectSystem=strict` makes everything else read-only.
+- Logs: `journalctl -u flowstate -f`.
+
+### Exposure: options
+
+**[A] LAN only.** `HOST=0.0.0.0`, `TRUST_PROXY=0`, open port 3000 on the host firewall to the LAN only. Simplest. No HTTPS, which is acceptable on a home network.
+
+**[B] Reverse proxy with HTTPS (needed for access from outside).** Caddy on the same box handles certificates automatically:
+```
+flowstate.example.com {
+    reverse_proxy 127.0.0.1:3000 {
+        flush_interval -1
+    }
+}
+```
+Set `HOST=127.0.0.1` and `TRUST_PROXY=1`. Keep `flush_interval -1`: without it Caddy can buffer the NDJSON stream, and verses arrive in one lump at the end instead of streaming.
+
+**[C] Tunnel (Tailscale or Cloudflare Tunnel).** Remote access without opening router ports. With Tailscale, behave as [A] on the tailnet. With Cloudflare Tunnel, `TRUST_PROXY=1`.
+
+### If it's reachable from the internet
+Every verse costs Gemini quota on your key, and the rate limit only slows abuse down. Put an auth gate in front: Caddy `basic_auth`, Cloudflare Access, or Tailscale-only access. Option [A] or a Tailscale-only [C] avoids the question entirely.
+
+### Smoke test after deploy
+1. `systemctl status flowstate` → active.
+2. `curl -s localhost:3000/api/nope` → `{"error":"Not found"}`.
+3. Open the app from another device, generate a verse, and watch it stream line by line (not all at once).
+4. `grep -c AIza /opt/flowstate/dist/assets/*.js` → `0` (no key in the shipped bundle).

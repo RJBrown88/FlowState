@@ -1,32 +1,38 @@
 # Blueprint 2 — Dependency and naming hygiene
 
-**Goal:** `package.json` lists only what the app uses, with each package in the right section, and the project is called FlowState everywhere instead of the AI Studio template names.
+**Goal:** each package sits in the right section of `package.json`, the project is called FlowState everywhere, and the leftover AI Studio wiring is gone, since the project won't go back to AI Studio.
 
-**Files:** `package.json`, `package-lock.json` (regenerated, never hand-edited), `index.html`, `README.md`, `vite.config.ts`, optionally `tsconfig.json` and `metadata.json`
+**Files:** `package.json`, `package-lock.json` (regenerated, never hand-edited), `index.html`, `README.md`, `vite.config.ts`, `.env.example`, `metadata.json` (deleted), optionally `tsconfig.json`
 **Size:** config only, no app logic changes
 **Dependencies:** none. Phase 3 builds on the result.
 
+### Decisions applied (2026-10-06)
+- **Template packages are kept** "just in case". This phase doesn't remove any of them (2a).
+- **AI Studio is no longer a target.** AI Studio-only files and settings are removed (2c, 2d).
+- **Self-hosted** is the deployment goal (affects Phase 3, noted here for context).
+
 ---
 
-## 2a. Remove unused packages
+## 2a. Template packages: keep, but label and preserve
 
-None of these is imported anywhere in `src/` or `vite.config.ts` (confirmed with `grep`):
+These come from the AI Studio full-stack template and are not imported anywhere in `src/` or `vite.config.ts` (confirmed with `grep`). Per the decision above they **stay in `package.json`**:
 
-| Package | Section now | Why it's there | Action |
-|---------|-------------|----------------|--------|
-| `express` | dependencies | AI Studio full-stack template | Remove |
-| `better-sqlite3` | dependencies | Template | Remove. It also compiles native C++ during install, which is slow and can fail on hosts without build tools. |
-| `dotenv` | dependencies | Template | Remove |
-| `@types/express` | devDependencies | Template | Remove |
-| `tsx` | devDependencies | Template (runs a TS server) | Remove |
-| `autoprefixer` | devDependencies | Tailwind v3 habit | Remove. Tailwind v4's Vite plugin handles vendor prefixes itself, and there's no PostCSS config that would use it. |
+| Package | Section | Future use | Cost of keeping |
+|---------|---------|------------|-----------------|
+| `express` | dependencies | **Used in Phase 3** (upgraded 4 → 5 there) | none |
+| `dotenv` | dependencies | Could load `.env.local` in Phase 3, but Node's `--env-file-if-exists` does the same | negligible |
+| `better-sqlite3` | dependencies | Local database (history of saved verses, favourites) | Compiles native code on install when no prebuilt binary matches the host. On a self-hosted box that means needing `python3`, `make` and `g++`, or a slower first install. |
+| `tsx` | devDependencies | Alternative TS runner for the server | negligible |
+| `@types/express` | devDependencies | **Used in Phase 3** (upgraded with Express) | none |
+| `autoprefixer` | devDependencies | None with Tailwind v4, which handles prefixes itself | negligible |
 
-### Phase 3 overlap
-Phase 3 adds a server and needs Express again. Two options:
-
-**[A] Remove everything now, Phase 3 adds back what it needs (recommended).** Phase 3 adds Express **5** (current major) rather than the template's Express 4. It needs neither `tsx` nor `dotenv`: Node 22 runs TypeScript files directly and loads env files with `--env-file-if-exists` (see Blueprint 3). Each phase's diff then shows exactly why each package exists.
-
-**[B] Remove only `better-sqlite3` and `autoprefixer` now.** Less churn, but Express stays pinned to v4 and the leftovers stay until Phase 3 decides about them.
+### Belt and braces: tag the original import
+The full original state is already in git history (commit `b55d06a`). A tag makes it findable by name instead of by hash:
+```bash
+git tag ai-studio-original b55d06a
+git push origin ai-studio-original
+```
+Any template file or package version can then be restored with `git show ai-studio-original:package.json`, even after later phases change things.
 
 ---
 
@@ -40,17 +46,14 @@ These run only at build time but are listed as runtime dependencies:
 
 `tailwindcss` is already in devDependencies.
 
-Why it matters: a production install (`npm ci --omit=dev`) currently installs the whole build toolchain. After Phase 3 there will be a production server, so this starts to matter.
+**Why it matters for self-hosting:** the production box will run `npm ci --omit=dev` (Phase 3). Right now that would still install the whole Vite/Tailwind toolchain. After this move it installs only what the server runs.
 
 ### Gotcha
 `npm install -D <pkg>` with no version installs the **latest** release, which would quietly upgrade vite from 6 to 8. Always pin to the existing range when moving a package:
-
 ```bash
-npm uninstall express better-sqlite3 dotenv @types/express tsx autoprefixer
 npm install -D vite@^6.2.0 @vitejs/plugin-react@^5.0.4 @tailwindcss/vite@^4.1.14
 ```
-
-`npm install -D` on a package that is already in `dependencies` moves it to `devDependencies`. Both commands rewrite `package-lock.json`.
+`npm install -D` on a package that's already in `dependencies` moves it to `devDependencies` and rewrites `package-lock.json`. Then check that `vite` appears only once in `package.json`.
 
 ### Expected end state
 ```jsonc
@@ -62,6 +65,9 @@ npm install -D vite@^6.2.0 @vitejs/plugin-react@^5.0.4 @tailwindcss/vite@^4.1.14
   "scripts": { /* unchanged */ },
   "dependencies": {
     "@google/genai": "^1.29.0",
+    "better-sqlite3": "^12.4.1",   // template, kept
+    "dotenv": "^17.2.3",           // template, kept
+    "express": "^4.21.2",          // template, kept — upgraded in Phase 3
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "react": "^19.0.0",
@@ -69,46 +75,49 @@ npm install -D vite@^6.2.0 @vitejs/plugin-react@^5.0.4 @tailwindcss/vite@^4.1.14
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.14",
+    "@types/express": "^4.17.21",  // template, kept — upgraded in Phase 3
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.4",
+    "autoprefixer": "^10.4.21",    // template, kept
     "tailwindcss": "^4.1.14",
+    "tsx": "^4.21.0",              // template, kept
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }
 }
 ```
+(JSON has no comments. The annotations above are for this document only.)
 
-**Not in this phase:** major-version upgrades (vite 8, motion 14, lucide 1, TS 7, `@google/genai` 2). Those are in the roadmap backlog. `@google/genai` 2 is handled in Phase 4, where it's nearly free: its breaking changes affect only the Interactions API, not `generateContent`, which is all FlowState uses.
+**Not in this phase:** major-version upgrades (vite 8, motion 14, lucide 1, TS 7, `@google/genai` 2). Those are in the roadmap backlog. `@google/genai` 2 is done in Phase 4.
 
 ---
 
-## 2c. Naming
+## 2c. Naming and AI Studio removal
 
 | File | Now | Change to |
 |------|-----|-----------|
 | `package.json` `name` | `react-example` | `flowstate` |
 | `package.json` `version` | `0.0.0` | `0.1.0` (optional — marks the first maintained version) |
 | `index.html` `<title>` | `My Google AI Studio App` | `FlowState` |
-| `index.html` | — | Add `<meta name="description">` using the line from `metadata.json` |
-| `README.md` | AI Studio banner + boilerplate | See below |
+| `index.html` | — | Add `<meta name="description">` with the description from `metadata.json` (copy it before deleting that file) |
+| `metadata.json` | AI Studio app manifest | **Delete.** Only AI Studio reads it. The tag from 2a preserves it. |
+| `.env.example` | `GEMINI_API_KEY` + `APP_URL` with AI Studio comments | Keep `GEMINI_API_KEY` with a plain comment. Drop `APP_URL`, since only AI Studio injected it and nothing in the code reads it. |
+| `README.md` | AI Studio banner, AI Studio app link, boilerplate | See below |
 
 ### README outline
-1. **FlowState** — one-line pitch (from `metadata.json`).
+1. **FlowState** — one-line pitch (the `metadata.json` description).
 2. **How it works** — seed → association web → bars; the three settings (Density / Orbit / Grid) in one table.
 3. **Run locally** — prerequisites (Node 22+), `npm install`, put the key in `.env.local`, `npm run dev`.
 4. **Security note** — until Phase 3: "the key is bundled into the client; don't host builds."
 5. **Project layout** — `src/App.tsx`, `src/services/geminiService.ts`, `src/lib/bars.ts`.
 
-Phase 3 updates sections 3–5.
-
-### `metadata.json` — decision needed
-AI Studio reads this file. Keep it if you might re-import the project into AI Studio. Delete it if the GitHub repo is now the home of this project. Recommendation: **keep it for now.** It's harmless, and Phase 3 is the point to decide whether AI Studio is still a deploy target.
+Phase 3 rewrites sections 3–5 and adds a **Self-hosting** section.
 
 ---
 
 ## 2d. Small cleanups
 
-- **`vite.config.ts:20`** — the comment reads `Do not modifyâfile watching…`. That's a UTF-8 em-dash mis-decoded during export. Replace it with `Do not modify — file watching…` or a plain hyphen.
+- **`vite.config.ts` HMR block (lines 18–22):** the `server.hmr: process.env.DISABLE_HMR !== 'true'` setting and its comment exist only because AI Studio's editor disables hot reload. Delete the whole `server` block, because Vite's default (hot reload on) is what you want. This also removes the garbled `modifyâfile` comment.
 - **`tsconfig.json` (optional):**
   - `experimentalDecorators` and `useDefineForClassFields: false` — no decorators or classes in the code. Remove them.
   - `paths: { "@/*": ["./*"] }` and the matching `resolve.alias` in `vite.config.ts` — nothing imports `@/`. Remove both or keep both. Don't remove only one.
@@ -118,8 +127,9 @@ AI Studio reads this file. Keep it if you might re-import the project into AI St
 
 ## Verification
 
-1. `npm ls --depth=0` — no `express`, `better-sqlite3`, `dotenv`, `tsx`, `autoprefixer`, `@types/express`, and no `invalid`/`missing` lines.
-2. `git diff package-lock.json` — packages are removed, but the **versions** of the remaining top-level packages are unchanged (vite stays 6.4.x).
-3. `npm run lint` and `npm run build` pass. Bundle size should match the current 661 KB, since nothing in the browser changed.
-4. `npm run dev` → the app loads, a verse generates, and the tab title reads "FlowState".
-5. Fresh-install check: `rm -rf node_modules && npm ci` completes noticeably faster (no native compile from `better-sqlite3`).
+1. `git tag -l` shows `ai-studio-original`, and `git ls-remote --tags origin` shows it on GitHub.
+2. `npm ls --depth=0` — all template packages are still listed, `vite` / `@vitejs/plugin-react` / `@tailwindcss/vite` are under dev, and there are no `invalid`/`missing` lines.
+3. `git diff package-lock.json` — the **versions** of all top-level packages are unchanged (vite stays 6.4.x). Only their dev/prod flags change.
+4. `grep -rn "AI Studio\|APP_URL\|DISABLE_HMR" --exclude-dir=node_modules --exclude-dir=docs .` → no matches.
+5. `npm run lint` and `npm run build` pass. Bundle size should match the current 661 KB, since nothing in the browser changed.
+6. `npm run dev` → the app loads, a verse generates, the tab title reads "FlowState", and editing `App.tsx` hot-reloads.
