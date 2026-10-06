@@ -20,7 +20,7 @@ An optional **tone** (e.g. *aggressive*, *melancholic*) colours the whole verse.
 
 ## Run locally
 
-**Prerequisites:** Node.js 22 or newer, and a Gemini API key.
+**Prerequisites:** Node.js 22.18 or newer (it runs the TypeScript server directly), and a Gemini API key.
 
 ```bash
 npm install
@@ -28,17 +28,30 @@ cp .env.example .env.local    # then put your key in .env.local
 npm run dev                   # http://localhost:3000
 ```
 
-Other scripts: `npm run lint` (typecheck), `npm run build` (production build into `dist/`), `npm run preview` (serve that build).
+`npm run dev` starts one server that handles the API and serves the app with hot reload. It restarts by itself when server files change.
 
-## Security note
+Other scripts: `npm run lint` (typecheck), `npm run build` (production build into `dist/`), `npm start` (serve that build in production mode).
 
-For now the API key is **bundled into the browser code** at build time, so anyone who can load the page can read it. Use this for local development only and don't host a build. Moving the key to a server is Phase 3 of the [roadmap](docs/ROADMAP.md).
+## How the key stays private
+
+The browser never talks to Gemini. It sends the seed and settings to this app's own server (`POST /api/verse`), and the server calls Gemini with the key from `.env.local` and streams the verse back. The key never appears in the files sent to the browser.
+
+The server also validates requests, rate-limits each client (`RATE_LIMIT_PER_MINUTE`, default 10), and turns Gemini failures into short, readable messages. All settings are listed in `.env.example`.
+
+## Self-hosting
+
+Any Linux box with Node 22.18+ works. The full guide (systemd service, reverse proxy, LAN vs. internet exposure, deploy and rollback) is in [Blueprint 3 § Self-hosting](docs/blueprints/03-server-side-key.md#self-hosting).
 
 ## Project layout
 
 | Path | What |
 |------|------|
-| `src/App.tsx` | The whole UI: controls, streaming output, bar rendering |
-| `src/services/geminiService.ts` | The system prompt and the streaming Gemini call |
+| `src/App.tsx` | The whole UI: controls, streaming output, Stop button, error banner |
+| `src/services/verseClient.ts` | Streams a verse from the server |
 | `src/lib/bars.ts` | Splits the streamed verse into numbered bars and `//` segments |
+| `server/index.ts` | Express server: `/api` routes, plus the app (Vite in dev, `dist/` in production) |
+| `server/verse.ts` | `POST /api/verse`: validation, rate limit, Gemini streaming, error messages |
+| `server/prompt.ts` | The system prompt and the per-request prompt |
+| `server/config.ts` | All environment settings, checked at startup |
+| `shared/verse.ts` | Setting values and limits used by both browser and server |
 | `docs/` | [Roadmap](docs/ROADMAP.md), [blueprints](docs/blueprints/) and [action plan](docs/ACTION_PLAN.md) |

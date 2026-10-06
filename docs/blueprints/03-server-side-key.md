@@ -62,7 +62,7 @@ or, if Gemini fails mid-stream, `{"error":"…"}` as the last line.
 
 ### Running TypeScript on the server without a build step
 Node 22.18+ strips TypeScript types natively (this repo's container has 22.22). So:
-- dev: `node --watch --env-file-if-exists=.env.local server/index.ts`
+- dev: `node --watch-path=server --watch-path=shared --env-file-if-exists=.env.local server/index.ts`
 - prod: `node --env-file-if-exists=.env.local server/index.ts`
 
 No compile step, and nothing extra to install. `tsx` and `dotenv` stay in `package.json` (kept from the template per the Phase 2 decision) but aren't needed here. Rules this imposes, enforced by two `tsconfig.json` flags (below):
@@ -171,7 +171,7 @@ The value arrays let the server validate against the same lists the UI renders. 
    | Gemini status | Client message | Likely cause |
    |---|---|---|
    | 400 | "Gemini rejected the request." | Prompt/config problem |
-   | 401 / 403 | "Server API key is invalid or lacks access." | Key wrong or revoked |
+   | 401 / 403, or 400 mentioning the API key | "Server API key is invalid or lacks access." | Key wrong or revoked. Google reports an invalid key as **400** `INVALID_ARGUMENT`, so a status-only mapping would miss it. |
    | 404 | "Model `<id>` is unavailable." | **Preview model shut down** — see Phase 4 |
    | 429 | "Gemini quota exceeded — try again shortly." | Quota |
    | 5xx / other | "Gemini is having trouble — try again." | Upstream |
@@ -284,7 +284,7 @@ Delete the `define` block and the `loadEnv` call. The client no longer needs any
 ```jsonc
 "engines": { "node": ">=22.18" },
 "scripts": {
-  "dev": "node --watch --env-file-if-exists=.env.local server/index.ts",
+  "dev": "node --watch-path=server --watch-path=shared --env-file-if-exists=.env.local server/index.ts",
   "build": "vite build",
   "start": "NODE_ENV=production node --env-file-if-exists=.env.local server/index.ts",
   "lint": "tsc --noEmit"
@@ -297,7 +297,9 @@ npm install -D @types/express@^5
 ```
 Express 5 instead of the template's 4: v5 is the current release line, and it forwards errors from async route handlers to the error middleware, which the streaming route relies on. The original 4.x version stays recoverable from the `ai-studio-original` tag. `@google/genai` stays in dependencies, but it's now only used by the server.
 
-`node --watch` restarts the server when server files change. Client changes are still hot-reloaded by Vite without a restart.
+`--watch-path` restarts the server when files in `server/` or `shared/` change. Client changes are still hot-reloaded by Vite without a restart.
+
+**Why not plain `--watch`:** it follows every file the process imports, including the temporary config file Vite writes and deletes on each start. Found in Phase 3 testing: the server restarted in an endless loop.
 
 ### `tsconfig.json`
 Add:
