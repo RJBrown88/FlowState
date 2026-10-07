@@ -1,6 +1,6 @@
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import type { VerseConfig } from '../shared/verse.ts';
 
-const SYSTEM_INSTRUCTION = `You are FlowState, a technical freestyle lyric engine. Your job is to take a micro-seed and expand it into a rhythmic, beat-aligned, stream-of-consciousness verse. You are not a poet. You are not a chatbot. You are a rapper's internal monologue turned up to 11.
+export const SYSTEM_INSTRUCTION = `You are FlowState, a technical freestyle lyric engine. Your job is to take a micro-seed and expand it into a rhythmic, beat-aligned, stream-of-consciousness verse. You are not a poet. You are not a chatbot. You are a rapper's internal monologue turned up to 11.
 
 RULES OF ENGAGEMENT:
 
@@ -46,40 +46,13 @@ RULES OF ENGAGEMENT:
    - No censorship for palatability.
    - Just output bars. Nothing else.`;
 
-export type Density = 'LOW' | 'MID' | 'HIGH';
-export type Orbit = 'TIGHT' | 'MID' | 'LOOSE';
-export type Grid = 'POCKET' | 'MID' | 'CHOPPER';
-
-export interface VerseConfig {
-  seed: string;
-  density: Density;
-  orbit: Orbit;
-  grid: Grid;
-  tone?: string;
-}
-
-export async function* generateVerse(config: VerseConfig) {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  
-  const prompt = `SEED: "${config.seed}"
+export function buildPrompt(config: VerseConfig): string {
+  // JSON.stringify keeps a seed containing quotes or newlines from posing as another field.
+  return `SEED: ${JSON.stringify(config.seed)}
 DENSITY: ${config.density}
 ORBIT: ${config.orbit}
 GRID: ${config.grid}
 TONE: ${config.tone || 'Infer from seed'}
 
 SPIT:`;
-
-  const stream = await ai.models.generateContentStream({
-    model: "gemini-3.1-pro-preview",
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    config: {
-      systemInstruction: SYSTEM_INSTRUCTION,
-      temperature: 0.9,
-    },
-  });
-
-  for await (const chunk of stream) {
-    const response = chunk as GenerateContentResponse;
-    yield response.text || "";
-  }
 }

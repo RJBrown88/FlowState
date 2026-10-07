@@ -17,6 +17,9 @@ The *what* and *why* live here. The *how* lives in each phase's blueprint. *Who 
 | 2026-10-06 | Where will it run? | Self-hosted | Phase 3 becomes mandatory before any deploy. A deploy milestone is added. |
 | 2026-10-06 | Remove template packages? | Keep them for now | Phase 2 reorganizes instead of removing. The original import gets a git tag. Final call → backlog. |
 | 2026-10-06 | Return to AI Studio? | No | Phase 2 strips the AI Studio wiring. |
+| 2026-10-06 | Rate limiter (D3)? | `express-rate-limit` | Phase 3 adds it as a dependency. |
+| 2026-10-07 | Google deprecates sampling parameters: remove `temperature` now or in Phase 4? | Now, in Phase 3 | Phase 4's emergency path works with newer models. Its eval no longer tests temperature. |
+| 2026-10-06 | Caesura rendering and entrance delay (D1, D2)? | Every `//` is a caesura; delay unchanged | Applied in Phase 1. |
 
 ---
 
@@ -24,9 +27,9 @@ The *what* and *why* live here. The *how* lives in each phase's blueprint. *Who 
 
 | Step | Outcome | Size | Needs | Status | Blueprint |
 |------|---------|------|-------|--------|-----------|
-| **Phase 1** — UI bugs | One generation at a time, correct bar numbers, no dropped text | S | — | Not started | [01](blueprints/01-ui-bugs.md) |
-| **Phase 2** — Project hygiene | Correct package sections, FlowState naming, no AI Studio leftovers, original tagged | S | — | Not started | [02](blueprints/02-dependency-hygiene.md) |
-| **Phase 3** — Server-side key | Key never reaches the browser. Adds Stop button, real errors, rate limiting. | L | 2 | Not started | [03](blueprints/03-server-side-key.md) |
+| **Phase 1** — UI bugs | One generation at a time, correct bar numbers, no dropped text | S | — | Done | [01](blueprints/01-ui-bugs.md) |
+| **Phase 2** — Project hygiene | Correct package sections, FlowState naming, no AI Studio leftovers, original tagged | S | — | Done | [02](blueprints/02-dependency-hygiene.md) |
+| **Phase 3** — Server-side key | Key never reaches the browser. Adds Stop button, real errors, rate limiting. | L | 2 | In progress | [03](blueprints/03-server-side-key.md) |
 | **Milestone: first deploy** | FlowState running on the self-hosted box | M | 1, 3 | Not started | [03 § Self-hosting](blueprints/03-server-side-key.md#self-hosting) |
 | **Phase 4** — Model config | Model set in one place and swappable by config. Choice backed by an eval. | M | 3, 1 (soft) | Not started | [04](blueprints/04-model-config.md) |
 
@@ -92,13 +95,15 @@ Every phase also has to meet the shared gate below. Detailed checks are in each 
 | API key in the client bundle | Phase 3 |
 | No cancel, hidden error messages | Phase 3 |
 | 661 KB bundle (Gemini SDK in the browser) | Phase 3 |
-| Preview model, name in three places, `temperature: 0.9` | Phase 4 |
+| Preview model, name in three places | Phase 4 |
+| `temperature: 0.9` (deprecated by Google; upcoming models reject it) | Phase 3 |
 | Unused template packages | Backlog (kept by decision) |
 
 ---
 
 ## Backlog (unscheduled)
 
+- **Interactions API:** Google now calls `generateContent` "legacy" (still fully supported) and recommends the Interactions API for new work. Migrating rewrites the one Gemini call in `server/verse.ts`. Do it after Phase 4, with the eval as the before/after check.
 - **Template packages:** final keep-or-remove decision. Keep `better-sqlite3` if a saved-verses or favourites feature is planned.
 - **Major upgrades:** Vite, React plugin, motion, lucide-react, TypeScript. Do one at a time, each with its own build and smoke test.
 - **Accessibility:** tooltips are hover-only and invisible to touch and keyboard users.

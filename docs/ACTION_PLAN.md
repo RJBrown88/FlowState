@@ -129,7 +129,7 @@ Needs Phase 1, Phase 3 and host prep.
 - [ ] **Eval runs** (server started with `RATE_LIMIT_PER_MINUTE=100`), one variable at a time, each recorded in `docs/eval-results.md`:
   - [ ] Baseline: current model, SDK 1.x.
   - [ ] **Claude:** SDK bump to 2.x → re-run. Should match the baseline.
-  - [ ] **Claude:** remove `temperature` → re-run at the default thinking level and at `LOW`.
+  - [ ] **Claude:** re-run at the default thinking level and at `LOW`. (`temperature` was already removed in Phase 3.)
   - [ ] Candidate model(s) → run.
 - [ ] **Rob:** read the HIGH/LOOSE/CHOPPER verses side by side (the ~10-minute manual score). Make decision D7.
 - [ ] **Claude:** set the chosen default, record the decision in `docs/eval-results.md`, open the PR.
