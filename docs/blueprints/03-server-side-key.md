@@ -157,14 +157,14 @@ The value arrays let the server validate against the same lists the UI renders. 
    const stream = await ai.models.generateContentStream({
      model: config.modelId,
      contents: [{ role: 'user', parts: [{ text: buildPrompt(config) }] }],
-     config: { systemInstruction: SYSTEM_INSTRUCTION, temperature: 0.9, abortSignal: controller.signal },
+     config: { systemInstruction: SYSTEM_INSTRUCTION, abortSignal: controller.signal },
    });
    for await (const chunk of stream) {
      if (chunk.text) res.write(JSON.stringify({ text: chunk.text }) + '\n');
    }
    res.end(JSON.stringify({ done: true }) + '\n');
    ```
-   `ai` is one `new GoogleGenAI({ apiKey: config.apiKey })` created when the module loads, not one per request. `temperature: 0.9` is carried over unchanged so this phase doesn't alter output. Phase 4 revisits it.
+   `ai` is one `new GoogleGenAI({ apiKey: config.apiKey })` created when the module loads, not one per request. No `temperature` (or `top_p` / `top_k`): the original client sent `temperature: 0.9`, but Google's deprecation notice of 2026-10-07 says upcoming models will reject sampling parameters with a 400. Leaving it in would break Phase 4's emergency path (switching `GEMINI_MODEL` to a newer model). Output moves from 0.9 to the default 1.0, which Google already recommended for Gemini 3.
    Headers are set but not flushed before the `await`. If Gemini rejects the request before the first chunk (bad key, unknown model), the route can still answer with a proper status code.
 5. **Errors:** if `controller.signal.aborted`, return silently (the user pressed Stop). Otherwise, map `ApiError.status` (exported by `@google/genai`) to a short message and log the full error on the server:
 

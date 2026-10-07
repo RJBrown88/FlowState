@@ -81,7 +81,8 @@ verseRouter.post('/verse', limiter, async (req, res) => {
     const stream = await ai.models.generateContentStream({
       model: config.modelId,
       contents: [{ role: 'user', parts: [{ text: buildPrompt(verse) }] }],
-      config: { systemInstruction: SYSTEM_INSTRUCTION, temperature: 0.9, abortSignal: controller.signal },
+      // No temperature/top_p/top_k: Google has deprecated sampling parameters and upcoming models reject them.
+      config: { systemInstruction: SYSTEM_INSTRUCTION, abortSignal: controller.signal },
     });
     for await (const chunk of stream) {
       const text = chunk.text;

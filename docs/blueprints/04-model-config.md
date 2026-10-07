@@ -16,11 +16,11 @@ Today (before Phase 3):
 | Where | What |
 |---|---|
 | `src/services/geminiService.ts:73` | `model: "gemini-3.1-pro-preview"` |
-| `src/services/geminiService.ts:77` | `temperature: 0.9` |
+| `src/services/geminiService.ts:77` | `temperature: 0.9` (removed in Phase 3, see 4b) |
 | `src/App.tsx:110` | Marquee text `… // Gemini 3.1 Pro // …` |
 | `src/App.tsx:251` | Status bar `Engine: Gemini 3.1 Pro` |
 
-After Phase 3 the ID lives in `server/config.ts` and the temperature in `server/verse.ts`. The two UI labels are untouched.
+After Phase 3 the ID lives in `server/config.ts` and no sampling parameters are sent. The two UI labels are untouched.
 
 Two problems:
 1. **It's a preview model.** Google retires preview models on a few weeks' notice: `gemini-3-pro-preview` was shut down on 2026-03-09 and replaced by the 3.1 preview this app uses. When this one is retired, every request fails, and the app currently shows only "ENGINE STALLED".
@@ -53,15 +53,20 @@ Show the raw ID (`GEMINI-3.5-FLASH` once the marquee uppercases it) rather than 
 
 ## 4b. Generation settings
 
-### Temperature: remove the `0.9`
-Google's Gemini 3 developer guide strongly recommends leaving `temperature` at its default of **1.0**. Values below 1.0 can cause **looping**, which here means repeated bars, and degraded output. The 0.9 was a pre-Gemini-3 habit. Delete the line. Don't set 1.0 explicitly either: if a future model has a different default, it should apply.
+### Sampling parameters: already removed (Phase 3)
+Google's deprecation notice of 2026-10-07 settled this:
+- Since Gemini 3.6 Flash, `temperature`, `top_p` and `top_k` are fixed at default values, so custom values have no effect.
+- Upcoming models will **reject** requests that include them, with 400 `INVALID_ARGUMENT`.
+- `thinking_budget` will also be rejected. `thinking_level` is the replacement.
+
+Phase 3 therefore dropped the original `temperature: 0.9`, so the emergency path (4a) works with any newer model. FlowState never sent the other three. Don't add any of them back: thinking level (below) is now the only generation setting worth tuning.
 
 ### Thinking level: make it tunable
 Gemini 3 models reason before answering, and the default level is HIGH. For FlowState that's a real trade-off:
 - **For HIGH:** rule 1 of the system prompt ("silently build an association web") is exactly the kind of planning thinking helps with, and quality on DENSITY=HIGH (multi-syllable rhymes) probably depends on it.
 - **Against HIGH:** thinking happens *before* the first streamed token, so the screen sits at "Igniting…" for a noticeable time.
 
-Set it with `GEMINI_THINKING_LEVEL` (passed as `config.thinkingConfig.thinkingLevel` when set). Let the eval (4d) decide the default. Note that the accepted values differ by model (Pro models have taken `LOW`/`HIGH`; Flash also `MINIMAL`/`MEDIUM`). An unsupported value comes back as a 400, which Phase 3 already turns into a readable error.
+Set it with `GEMINI_THINKING_LEVEL` (passed as `config.thinkingConfig.thinkingLevel` when set, never as the deprecated `thinkingBudget`). Let the eval (4d) decide the default. Note that the accepted values differ by model (Pro models have taken `LOW`/`HIGH`; Flash also `MINIMAL`/`MEDIUM`). An unsupported value comes back as a 400, which Phase 3 already turns into a readable error.
 
 ---
 
@@ -132,7 +137,7 @@ The eval only means something if one variable changes at a time:
 1. Extend `server/config.ts`, add `/api/meta`, and wire the UI labels. **No behavior change yet** (default = current preview ID). This is the emergency-path slice.
 2. Write `scripts/eval.ts` and get a baseline on the current model.
 3. Bump the SDK and re-run the eval. It should match the baseline.
-4. Remove `temperature`. Run the eval with the default thinking level and with `LOW`.
+4. Run the eval with the default thinking level and with `LOW`. (`temperature` was already removed in Phase 3.)
 5. Run the eval on the candidate stable model(s). Pick the default and the thinking level, and record the decision at the top of `docs/eval-results.md`.
 
 Each step is its own commit, so any regression can be traced to one change.
