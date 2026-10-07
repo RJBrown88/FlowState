@@ -9,9 +9,9 @@
   "scripts": {
     "dev": "node --watch-path=server --watch-path=shared --env-file-if-exists=.env.local server/index.ts",
     "build": "vite build",
-    "start": "NODE_ENV=production node --env-file-if-exists=.env.local server/index.ts",
+    "start": "node --env-file-if-exists=.env.local server/index.ts --production",
     "preview": "vite preview",
-    "clean": "rm -rf dist",
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

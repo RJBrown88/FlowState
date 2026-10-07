@@ -40,7 +40,9 @@ The server also validates requests, rate-limits each client (`RATE_LIMIT_PER_MIN
 
 ## Self-hosting
 
-Any Linux box with Node 22.18+ works. The full guide (systemd service, reverse proxy, LAN vs. internet exposure, deploy and rollback) is in [Blueprint 3 § Self-hosting](docs/blueprints/03-server-side-key.md#self-hosting).
+Runs on any machine with Node 22.18+. There are two guides, both covering deploy, run-at-boot, smoke test and rollback:
+- **Windows on a home LAN** (the current setup): [Blueprint 3 § Windows host](docs/blueprints/03-server-side-key.md#windows-host).
+- **Linux with systemd**, optionally behind a reverse proxy: [Blueprint 3 § Self-hosting](docs/blueprints/03-server-side-key.md#self-hosting).
 
 ## Project layout
 
