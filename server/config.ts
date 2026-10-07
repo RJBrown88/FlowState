@@ -14,9 +14,13 @@ if (!apiKey) {
   process.exit(1);
 }
 
+// `npm start` passes --production rather than NODE_ENV=production, which only works in Unix shells.
+const isProd = process.env.NODE_ENV === 'production' || process.argv.includes('--production');
+if (isProd) process.env.NODE_ENV = 'production'; // Express reads it when the app is created, after this module runs
+
 export const config = {
   apiKey,
-  isProd: process.env.NODE_ENV === 'production',
+  isProd,
   port: int('PORT', 3000),
   host: process.env.HOST || '0.0.0.0',
   trustProxy: int('TRUST_PROXY', 0), // number of reverse proxies in front (0 = none)

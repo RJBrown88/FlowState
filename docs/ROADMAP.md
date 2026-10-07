@@ -18,6 +18,8 @@ The *what* and *why* live here. The *how* lives in each phase's blueprint. *Who 
 | 2026-10-06 | Remove template packages? | Keep them for now | Phase 2 reorganizes instead of removing. The original import gets a git tag. Final call → backlog. |
 | 2026-10-06 | Return to AI Studio? | No | Phase 2 strips the AI Studio wiring. |
 | 2026-10-06 | Rate limiter (D3)? | `express-rate-limit` | Phase 3 adds it as a dependency. |
+| 2026-10-07 | How is it reached (D4)? | LAN only | No proxy, HTTPS or auth gate needed. `HOST=0.0.0.0`, `TRUST_PROXY=0`, firewall rule on the Private profile only. |
+| 2026-10-07 | What's the host (D5)? | Windows, AMD Ryzen 7 5800X (x64), Node 22.18+ | Deploy follows Blueprint 3 § Windows host (service wrapper instead of systemd). `npm start` made cross-platform. |
 | 2026-10-07 | Google deprecates sampling parameters: remove `temperature` now or in Phase 4? | Now, in Phase 3 | Phase 4's emergency path works with newer models. Its eval no longer tests temperature. |
 | 2026-10-06 | Caesura rendering and entrance delay (D1, D2)? | Every `//` is a caesura; delay unchanged | Applied in Phase 1. |
 
@@ -29,8 +31,8 @@ The *what* and *why* live here. The *how* lives in each phase's blueprint. *Who 
 |------|---------|------|-------|--------|-----------|
 | **Phase 1** — UI bugs | One generation at a time, correct bar numbers, no dropped text | S | — | Done | [01](blueprints/01-ui-bugs.md) |
 | **Phase 2** — Project hygiene | Correct package sections, FlowState naming, no AI Studio leftovers, original tagged | S | — | Done | [02](blueprints/02-dependency-hygiene.md) |
-| **Phase 3** — Server-side key | Key never reaches the browser. Adds Stop button, real errors, rate limiting. | L | 2 | In progress | [03](blueprints/03-server-side-key.md) |
-| **Milestone: first deploy** | FlowState running on the self-hosted box | M | 1, 3 | Not started | [03 § Self-hosting](blueprints/03-server-side-key.md#self-hosting) |
+| **Phase 3** — Server-side key | Key never reaches the browser. Adds Stop button, real errors, rate limiting. | L | 2 | Done | [03](blueprints/03-server-side-key.md) |
+| **Milestone: first deploy** | FlowState running on the self-hosted box | M | 1, 3 | Not started | [03 § Windows host](blueprints/03-server-side-key.md#windows-host) |
 | **Phase 4** — Model config | Model set in one place and swappable by config. Choice backed by an eval. | M | 3, 1 (soft) | Not started | [04](blueprints/04-model-config.md) |
 
 S = an evening, M = a weekend, L = a few sessions. Status values: Not started → In progress → Done.
@@ -66,7 +68,8 @@ Every phase also has to meet the shared gate below. Detailed checks are in each 
 |------|------------|--------|------------|
 | Preview model retired before Phase 4 | Medium | App stops generating | Phase 3 turns this into a clear "model unavailable" error. If it happens, do Phase 4's step 4a (config-driven model) immediately; the eval can follow. |
 | Model IDs in Blueprint 4 are out of date | Medium | Wrong default | Blueprint 4 has an explicit step to verify them against Google's docs before choosing. |
-| Host's Node is older than 22.18 | Medium | Server won't start | Check `node -v` on the box before Phase 3 work is deployed. Install from NodeSource if needed. |
+| Host's Node is older than 22.18 | Medium | Server won't start | Check `node -v` on the box before deploying. Install the current LTS from nodejs.org if needed. |
+| PC sleeps or reboots for updates | Medium | App unreachable for a while | Sleep disabled on AC power. The service starts at boot (verified by the reboot check in the smoke test). |
 | `better-sqlite3` fails to compile on the host | Low–Med | Deploy fails at install | Install build tools on the box (Blueprint 3). Or revisit the keep-templates decision. |
 | Public exposure burns Gemini quota | Low (if gated) | Cost | Rate limit (Phase 3) plus an auth gate or LAN/tailnet-only exposure (deploy milestone). |
 
@@ -76,8 +79,7 @@ Every phase also has to meet the shared gate below. Detailed checks are in each 
 
 | Question | Needed by | Options |
 |----------|-----------|---------|
-| How is the app reached? | First deploy | LAN only / Caddy + HTTPS / Tailscale or Cloudflare Tunnel (trade-offs in Blueprint 3) |
-| What's the host? (OS, Node version, CPU arch) | First deploy | Determines the Node install and whether `better-sqlite3` needs compiling |
+| Service wrapper on Windows: NSSM or Task Scheduler? | First deploy | NSSM recommended (Blueprint 3 § Windows host) |
 | Which model is the default? | End of Phase 4 | Decided by the eval |
 
 ---

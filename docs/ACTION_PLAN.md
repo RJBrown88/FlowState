@@ -43,8 +43,8 @@ Each one blocks only the step listed. Recommended options are from the blueprint
 | D1 | `//` rendering: every `//` is a caesura, or only the first | Phase 1 | Every `//` (1c-A) | Rob |
 | D2 | Cap the bar entrance delay? | Phase 1 | Optional: Rob's taste (1d) | Rob |
 | D3 | Rate limiter: package or hand-rolled | Phase 3 | `express-rate-limit` | Rob |
-| D4 | How the app is reached: LAN / Caddy + HTTPS / tunnel | First deploy | LAN or Tailscale unless outside access is needed | Rob |
-| D5 | Host details: OS, CPU type, Node version | First deploy | — (facts, not a choice) | Rob |
+| D4 | How the app is reached: LAN / Caddy + HTTPS / tunnel | First deploy | **Answered: LAN only** | Rob |
+| D5 | Host details: OS, CPU type, Node version | First deploy | **Answered: Windows, Ryzen 7 5800X, Node 22.18+** | Rob |
 | D6 | Give the cloud session a Gemini key (as an environment secret) so Claude can run evals? | Phase 4 | Use a separate key with a low quota limit if yes | Rob |
 | D7 | Default model and thinking level | End of Phase 4 | Decided by eval results | Rob |
 
@@ -97,11 +97,13 @@ Larger phase. Claude builds it in reviewable commits inside one PR:
 
 ## Host prep — Rob, any time before the deploy · [blueprint § Self-hosting](blueprints/03-server-side-key.md#self-hosting)
 
-- [ ] Answer D4 and D5.
-- [ ] Provision the box (VM, LXC or bare metal).
-- [ ] Install Node 22.18+ and confirm with `node -v`. Install `build-essential python3`.
-- [ ] Create the `flowstate` user and `/opt/flowstate`.
-- [ ] If D4 is Caddy or a tunnel: set up DNS and the proxy or tunnel. Choose the auth gate if it's reachable from the internet.
+Host: **Windows, LAN only** (D4/D5 answered 2026-10-07). Steps in [Blueprint 3 § Windows host](blueprints/03-server-side-key.md#windows-host).
+
+- [x] Answer D4 and D5.
+- [ ] `node -v` shows v22.18.0 or newer. Git is installed.
+- [ ] Choose the service wrapper: NSSM (recommended) or Task Scheduler. With NSSM, download it from nssm.cc.
+- [ ] Home network is on the **Private** profile (`Get-NetConnectionProfile`). Add the firewall rule for port 3000 (Private only).
+- [ ] Set sleep to Never on AC power. Reserve the PC's IP in the router (optional, but saves hunting for it).
 
 ---
 
@@ -109,12 +111,13 @@ Larger phase. Claude builds it in reviewable commits inside one PR:
 
 Needs Phase 1, Phase 3 and host prep.
 
-- [ ] **Rob:** clone `main` into `/opt/flowstate`. Create `.env.local` (`chmod 600`) with the key and the D4 settings (`HOST`, `TRUST_PROXY`).
-- [ ] **Rob:** run the deploy steps (`npm ci` → build → prune), install the systemd unit, `systemctl enable --now flowstate`.
-- [ ] **Rob:** run the smoke test, including a reboot, streaming from another device, and the no-key-in-bundle check.
+- [ ] **Rob:** clone `main` into `C:\apps\FlowState`, create `logs\`, and create `.env.local` with the key, `HOST=0.0.0.0` and `TRUST_PROXY=0`.
+- [ ] **Rob:** run the deploy steps (`npm ci` → `npm run build` → `npm prune --omit=dev`).
+- [ ] **Rob:** install and start the service (the NSSM commands in the blueprint).
+- [ ] **Rob:** run the smoke test, including a PC restart, a verse streaming on a phone over Wi-Fi, and the no-key-in-bundle check.
 - [ ] **Rob:** tag the deploy (`deploy-…`). Roadmap: First deploy → Done.
 
-**If something fails:** `journalctl -u flowstate -e` usually names the cause: missing env var, wrong Node path, or a port conflict. Paste it to Claude.
+**If something fails:** `C:\apps\FlowState\logs\err.log` usually names the cause: missing env var, a Node path the service can't reach, or a port conflict. Paste it to Claude.
 
 ---
 

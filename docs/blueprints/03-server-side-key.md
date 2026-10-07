@@ -360,6 +360,8 @@ Covers the roadmap exit criteria for Phase 3 plus the shared gate. The deploy mi
 
 Decision (2026-10-06): **self-hosted**. Any Linux box works: a VM, an LXC container, a Pi or bare metal. The steps assume Debian/Ubuntu and systemd.
 
+> **The actual first host is Windows (LAN only).** See [Windows host](#windows-host) below. This Linux guide stays for a future move.
+
 ### Prerequisites on the box
 - **Node 22.18 or newer.** Distro packages are often older. Use NodeSource's apt repo or the official binaries, and check with `node -v`.
 - **Build tools, possibly:** `better-sqlite3` (kept from the template) downloads a prebuilt binary when one matches the CPU and Node version, and otherwise compiles. Install `build-essential python3` so a fallback compile doesn't fail the deploy.
@@ -398,7 +400,7 @@ User=flowstate
 WorkingDirectory=/opt/flowstate
 Environment=NODE_ENV=production
 EnvironmentFile=/opt/flowstate/.env.local
-ExecStart=/usr/bin/node server/index.ts
+ExecStart=/usr/bin/node server/index.ts --production
 Restart=on-failure
 
 # Hardening: the app writes nothing to disk
@@ -439,6 +441,111 @@ Every verse costs Gemini quota on your key, and the rate limit only slows abuse 
 3. `sudo reboot`, then repeat step 1 → the service came back on its own (roadmap exit criterion).
 4. Open the app from another device, generate a verse, and watch it stream line by line (not all at once).
 5. `grep -c AIza /opt/flowstate/dist/assets/*.js` → `0` (no key in the shipped bundle).
+
+---
+
+## Windows host
+
+Decision (2026-10-07): the first deploy runs on **Windows, LAN only** (AMD Ryzen 7 5800X, x64). The Linux guide above still applies if the app ever moves. Everything below uses PowerShell.
+
+### What's different from Linux
+- **No systemd.** A service wrapper starts FlowState at boot and restarts it if it crashes (options below).
+- **`npm start` passes `--production`** instead of `NODE_ENV=production`, because that prefix syntax only works in Unix shells. `server/config.ts` accepts either.
+- **Windows Firewall** has to allow port 3000, and only on the **Private** (home) network profile.
+- **Sleep:** a desktop that goes to sleep takes FlowState offline with it.
+
+### Prerequisites
+- **Node 22.18 or newer.** Check with `node -v`. If it's older, install the current LTS from nodejs.org.
+- **Git**, to clone and update.
+- **`better-sqlite3` (kept template package):** npm normally downloads a prebuilt Windows x64 binary. If `npm ci` instead tries to compile it and fails, install the Visual Studio Build Tools with the "Desktop development with C++" workload, then rerun.
+
+### Layout
+```
+C:\apps\FlowState\              git checkout (not under OneDrive or your user profile)
+C:\apps\FlowState\.env.local    the key and settings (gitignored)
+C:\apps\FlowState\logs\         service output
+```
+`.env.local` for LAN-only:
+```
+GEMINI_API_KEY="your-key"
+HOST=0.0.0.0
+TRUST_PROXY=0
+```
+
+### First install and every update
+```powershell
+# first time only
+git clone https://github.com/RJBrown88/FlowState C:\apps\FlowState
+New-Item -ItemType Directory C:\apps\FlowState\logs
+
+# every deploy
+cd C:\apps\FlowState
+git pull
+npm ci                 # full install: the build needs Vite and Tailwind
+npm run build          # writes dist\
+npm prune --omit=dev   # drop build tools from the running install
+Restart-Service FlowState                          # skip on the very first deploy (no service yet)
+git tag "deploy-$(Get-Date -Format yyyyMMdd-HHmm)"   # records which commit went live
+```
+Stop the service before `npm ci` if it complains about locked files (`Stop-Service FlowState`). Windows locks files that are in use, which Linux doesn't.
+
+### Run it as a service: options
+
+**[A] NSSM (recommended).** A small free tool that wraps any program as a real Windows service. It starts at boot before anyone logs in, restarts on crash, and writes logs to files. Download it from nssm.cc, then in an **admin** PowerShell:
+```powershell
+$node = (Get-Command node).Source          # usually C:\Program Files\nodejs\node.exe
+nssm install FlowState $node "--env-file-if-exists=.env.local server/index.ts --production"
+nssm set FlowState AppDirectory C:\apps\FlowState
+nssm set FlowState AppStdout C:\apps\FlowState\logs\out.log
+nssm set FlowState AppStderr C:\apps\FlowState\logs\err.log
+nssm set FlowState AppRotateFiles 1
+nssm set FlowState AppRotateBytes 1048576
+nssm set FlowState AppRestartDelay 5000
+nssm set FlowState Start SERVICE_AUTO_START
+nssm start FlowState
+```
+- If `node` lives under your user profile (nvm-windows and similar), point `$node` at a system-wide install instead. A service can't rely on per-user paths.
+- **Optional hardening:** by default the service runs as LocalSystem, which can do anything on the machine. To run it with minimal rights instead, use `nssm set FlowState ObjectName "NT AUTHORITY\LocalService"` and give that account write access to the log folder: `icacls C:\apps\FlowState\logs /grant "NT AUTHORITY\LocalService:(OI)(CI)M"`. If the service then fails with "access denied", check that LocalService can read `C:\apps\FlowState`.
+
+**[B] Task Scheduler (nothing to install).** Create a task:
+- Trigger "At startup", and select "Run whether user is logged on or not".
+- Action: start `cmd.exe` with arguments `/c node --env-file-if-exists=.env.local server/index.ts --production >> logs\out.log 2>&1`, starting in `C:\apps\FlowState`.
+- Settings: "If the task fails, restart every 1 minute", and untick "Stop the task if it runs longer than 3 days".
+
+This works, but restarts and logging are rougher than with NSSM. Updates use `Stop-ScheduledTask` / `Start-ScheduledTask` instead of `Restart-Service`.
+
+### Firewall (LAN only)
+```powershell
+Get-NetConnectionProfile          # your home network must say NetworkCategory : Private
+# if it says Public: Set-NetConnectionProfile -InterfaceAlias "<name from above>" -NetworkCategory Private
+New-NetFirewallRule -DisplayName "FlowState (LAN)" -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow -Profile Private
+```
+If Windows shows a firewall prompt the first time Node listens, allow **Private networks only**.
+
+### Reaching it from other devices
+- Find the PC's address with `ipconfig` (IPv4 Address), then open `http://<that-address>:3000` from a phone on the same Wi-Fi.
+- Reserve that address in your router's DHCP settings so it doesn't change. `http://<PC-NAME>:3000` often works too.
+- **Sleep:** set the PC never to sleep on AC power, or FlowState disappears whenever the PC naps: `powercfg /change standby-timeout-ac 0`.
+
+### Smoke test after deploy
+```powershell
+Get-Service FlowState                                     # Status: Running
+Invoke-RestMethod http://localhost:3000/api/health        # ok : True
+Select-String -Path C:\apps\FlowState\dist\assets\*.js -Pattern AIza   # no output = no key in the bundle
+```
+Then:
+1. Restart the PC and run the first two lines again. The service should come back on its own (roadmap exit criterion).
+2. On a phone on the Wi-Fi, open `http://<PC-address>:3000` and generate a verse. It should stream in line by line.
+
+**If something fails:** `logs\err.log` usually names the cause: missing `GEMINI_API_KEY`, a port already in use, or a Node path the service can't reach. Paste it to Claude.
+
+### Rolling back
+```powershell
+cd C:\apps\FlowState
+git checkout deploy-<previous timestamp>
+npm ci; npm run build; npm prune --omit=dev; Restart-Service FlowState
+git checkout main      # before the next normal git pull
+```
 
 ---
 
